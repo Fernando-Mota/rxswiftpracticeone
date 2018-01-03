@@ -56,7 +56,36 @@ class PhotosViewController: UICollectionViewController {
     // MARK: View Controller
     override func viewDidLoad() {
         super.viewDidLoad()
+        let authorized = PHPhotoLibrary.authorized.share()
         
+        authorized
+            .skipWhile{ authorized in
+                authorized == false
+            }.take(1)
+            .subscribe(onNext: { [weak self] _ in
+                self?.photos = PhotosViewController.loadPhotos()
+                DispatchQueue.main.async {
+                    self?.collectionView?.reloadData()
+                }
+            }).disposed(by: disposeBag)
+        
+        authorized
+            .skip(1)
+            .takeLast(1)
+            .filter { authorized in authorized == false }
+            .subscribe(onNext: { [weak self] _ in
+                guard let errorMessage = self?.errorMessage else { return }
+                DispatchQueue.main.async(execute: errorMessage)
+            }).disposed(by: disposeBag)
+    }
+    
+    private func errorMessage() {
+        alert(title: "No acesses to Camera Roll", description: "You can grant access to Combinestagram from the Settings app").asObservable()
+            .take(5.0, scheduler: MainScheduler.instance)
+            .do(onDispose: { [weak self] in
+                self?.dismiss(animated: true, completion: nil)
+                _ = self?.navigationController?.popViewController(animated: true)
+            }).subscribe().disposed(by: disposeBag)
     }
     
     override func viewWillDisappear(_ animated: Bool) {

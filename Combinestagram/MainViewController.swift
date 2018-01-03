@@ -34,19 +34,23 @@ class MainViewController: UIViewController {
     
     private let disposeBag = DisposeBag()
     private let images = Variable<[UIImage]>([])
+    private var imageCache = [Int]()
     
     
     override func viewDidLoad() {
         super.viewDidLoad()
         
-        images.asObservable()
+        let observableImages = images.asObservable().share()
+        
+        observableImages
+            .throttle(0.5, scheduler: MainScheduler.instance)
             .subscribe(onNext: { [weak self] images in
                 guard let preview = self?.imagePreview else {return}
                 preview.image = UIImage.collage(images: images, size: preview.frame.size)
             }).disposed(by: disposeBag)
 
         
-        images.asObservable()
+        observableImages
             .subscribe (onNext: { [weak self] images in
                 self?.updateUI(photos: images)
         }).disposed(by: disposeBag)
@@ -65,6 +69,7 @@ class MainViewController: UIViewController {
     
     @IBAction func actionClear() {
         images.value = []
+        imageCache = []
     }
     
     @IBAction func actionSave() {
@@ -86,7 +91,21 @@ class MainViewController: UIViewController {
     @IBAction func actionAdd() {
         //images.value.append(UIImage(named: "IMG_1907.jpg")!)
         let photosContrller  = storyboard!.instantiateViewController(withIdentifier: "PhotosViewController") as! PhotosViewController
-        photosContrller.selectedPhotos
+        let newPhotos = photosContrller.selectedPhotos.share()
+        
+        newPhotos
+            .takeWhile { [weak self] image in
+                return (self?.images.value.count ?? 0) < 6
+            }
+            .filter{ [weak self] newImage in
+                let len = UIImagePNGRepresentation(newImage)?.count ?? 0
+                guard self?.imageCache.contains(len) == false else {return false}
+                self?.imageCache.append(len)
+                return true
+            }
+            .filter { newImage in
+                return newImage.size.width > newImage.size.height
+            }
             .subscribe(
                 onNext: { [weak self] newImage in
                     guard let images = self?.images else {return}
@@ -98,6 +117,19 @@ class MainViewController: UIViewController {
                     print("Completed photo selection")
                 }).disposed(by: photosContrller.disposeBag)
         navigationController?.pushViewController(photosContrller, animated: true)
+        
+        newPhotos
+            .ignoreElements()
+            .subscribe(onCompleted: { [weak self] in
+                self?.updateNavigationIcon()
+            }).disposed(by: disposeBag)
+    }
+    
+    func updateNavigationIcon() {
+        let icon = imagePreview.image?.scaled(CGSize(width: 22, height: 22))
+                    .withRenderingMode(.alwaysOriginal)
+        
+        navigationItem.leftBarButtonItem = UIBarButtonItem(image: icon, style: .done, target: nil, action: nil)
     }
     
     func showMessage(_ title: String, description: String? = nil) {
@@ -110,10 +142,13 @@ extension UIViewController {
     func alert(title: String, description: String) -> Completable {
         let completable = Completable.create { [weak self] completable in
             let alert = UIAlertController(title: title, message: description, preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "Close", style: .default, handler: { [weak self] _ in self?.dismiss(animated: true, completion: nil)}))
+            alert.addAction(UIAlertAction(title: "Close", style: .default, handler: {_ in
+                completable(.completed)
+            }))
             self?.present(alert, animated: true, completion: nil)
-            completable(.completed)
-            return Disposables.create()
+            return Disposables.create{
+                self?.dismiss(animated: true, completion: nil)
+            }
         }
         return completable
     }
